@@ -1,0 +1,728 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html style="height: 100%; border: 0; margin: 0; padding: 0"
+	xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+<link rel="stylesheet" href="css/start/jquery-ui.css"></link>
+<link rel="shortcut icon" href="favicon.ico"/>
+<script type="text/javascript"
+	src="http://code.jquery.com/jquery-1.6.1.min.js"></script>
+<script type="text/javascript" src="js/jquery-ui-min.js"></script>
+<script type="text/javascript">
+
+//constants
+var FOOD_TYPE_APPLE = 1;
+var FOOD_TYPE_BANANA = 2;
+var FOOD_TYPE_PINEAPPLE = 3;
+var FOOD_TYPE_PEAR = 4;
+var FOOD_TYPE_GRAPE = 5;
+
+var TRAJECTORY_UP = 1;
+var TRAJECTORY_DOWN = 2;
+var TRAJECTORY_LEFT = 3;
+var TRAJECTORY_RIGHT = 4;
+
+//settings that shouldn't be changed
+var pixelSize = 30;
+
+//settings to play around with
+var boardWidth = 720; //must be an integer multiple of pixelSize!
+var boardHeight = 390; //must be an integer multiple of pixelSize!
+var deadlyWalls = true;
+var interval = 150; //millisecond interval between snake movements
+var maxFoodOnBoard = 3; //max simultaneous number of food items on the board
+var foodSpawnTimePeriodMultiplier = 1.5; //inverse multiplier controlling how often food spawns
+
+//globals
+var snakePositions = new Array(); //indicates which pixels of the board the snake occupies
+var foodPositions = new Array(); //indicates which pixels of the board the food pieces occupy
+
+var initialX; //snake spawn point
+var initialY; //snake spawn point
+var snake; //snake object
+var board; //board object
+var boardContext; //board context object (HTML5 canvas)
+var score = 0;
+var gameTimer;
+var foodSpawnTimer;
+var displayMessageTimer;
+
+//global booleans
+var lockTrajectory = false; //prevents from changing snake trajectory more than once during clock cycle
+var running = false; //to handle paused/unpaused states
+var mustGrow = false; //to handle snake growth upon eating food
+var gameOver = false;
+var lockHeight = false;
+var lockWidth = false;
+
+//users browser window size
+var browserWidth;
+var browserHeight;
+
+function InitializeSnakePositions() {
+	for (i = 0; i <= board.width; i++) {
+		snakePositions[i] = new Array();
+		for (j = 0; j <= board.height; j++) {
+			snakePositions[i][j] = false;
+		}
+	}
+}
+
+function InitializeFoodPositions() {
+    for (i = 0; i <= board.width; i++) {
+        foodPositions[i] = new Array();
+        for (j = 0; j <= board.height; j++) {
+            foodPositions[i][j] = false;
+        }
+    }
+    FoodManager.foodOnBoard = new Array();
+}
+
+function Food(x, y, type) {
+	this.x = x;
+	this.y = y;
+	this.type = type;
+
+    this.render = function() {
+    	var foodImage = document.getElementById("food_" + type);
+    	boardContext.drawImage(foodImage, x, y, pixelSize, pixelSize);
+    }
+
+    this.unrender = function() {
+    	boardContext.fillStyle = "rgb(255,255,255)";
+    	boardContext.fillRect(x, y, pixelSize, pixelSize);
+    }
+}
+
+function FoodManager() {
+}
+
+FoodManager.foodOnBoard = new Array();
+
+FoodManager.spawnFood = function(x, y) {
+
+	if (!running || gameOver) {
+        clearTimeout(foodSpawnTimer);
+        return;
+    }
+
+    if (FoodManager.foodOnBoard.length >= maxFoodOnBoard) {
+        return;
+    }
+
+    clearTimeout(foodSpawnTimer);
+
+    var foodX = x;
+    var foodY = y;
+
+    if (!foodX && !foodY) {
+        do {
+             foodX = Math.floor(Math.random()*(board.width/pixelSize)) * pixelSize;
+             foodY = Math.floor(Math.random()*(board.height/pixelSize)) * pixelSize;
+        } while (snakePositions[foodX][foodY] == true || foodPositions[foodX][foodY] instanceof Food)
+    }
+
+    var foodType = Math.floor(Math.random()*5) + 1;
+
+    var food = new Food(foodX, foodY, foodType);
+    foodPositions[foodX][foodY] = food;
+    FoodManager.foodOnBoard.push(food);
+
+//    console.log("Spawning food at: " + foodX + "," + foodY);
+    
+    foodSpawnTimer = setTimeout("FoodManager.spawnFood()", foodSpawnTimePeriodMultiplier* interval*(board.width/pixelSize)); //the amount of time food stays is a function of the board size obviously
+
+}
+
+FoodManager.renderAllFood = function() {
+	var food;
+	for (var index in FoodManager.foodOnBoard) {
+		FoodManager.foodOnBoard[index].render();
+	}
+}
+
+FoodManager.removeFood = function(food) {
+	if (!(food instanceof Food)) {
+		return;
+	}
+	var indexOfFood = FoodManager.foodOnBoard.indexOf(food);
+	if (indexOfFood != -1) {
+    	FoodManager.foodOnBoard.splice(indexOfFood, 1);
+    	foodPositions[food.x][food.y] = false;
+	}
+
+	if (FoodManager.foodOnBoard.length < maxFoodOnBoard) {
+		clearTimeout(foodSpawnTimer);
+		FoodManager.spawnFood();
+	}
+}
+
+//FoodManager.consumeFood = function(food) {
+//	
+//}
+
+function BodyPiece(x, y, trajectory, isHead) {
+	this.x = x;
+	this.y = y;
+	this.trajectory = trajectory; //other possible values - TRAJECTORY_LEFT, TRAJECTORY_RIGHT, TRAJECTORY_UP, TRAJECTORY_DOWN
+	this.isHead = isHead;
+
+	this.render = function() {
+//	    boardContext.fillRect(this.x, this.y, pixelSize, pixelSize);
+        if (!this.isHead) {
+        	var snakeBodyImage;
+            if (!gameOver) {
+                snakeBodyImage = document.getElementById("snake_body");
+            } else {
+                if (snakePositions[x][y] == "true") {
+                    snakeBodyImage = "";
+                } else {
+                	   snakeBodyImage = document.getElementById("snake_body_dead");
+                }
+            }
+            boardContext.fillStyle = "rgb(255,255,255)";
+            boardContext.fillRect(this.x, this.y, pixelSize, pixelSize);
+    		boardContext.drawImage(snakeBodyImage, this.x, this.y, pixelSize, pixelSize);
+        } else {
+            if (this.trajectory==TRAJECTORY_LEFT) {
+                var snakeHeadImage = document.getElementById("snake_head_left");
+            } else if (this.trajectory==TRAJECTORY_RIGHT) {
+                var snakeHeadImage = document.getElementById("snake_head_right");
+            } else if (this.trajectory==TRAJECTORY_UP) {
+                var snakeHeadImage = document.getElementById("snake_head_up");
+            } else if (this.trajectory==TRAJECTORY_DOWN) {
+                var snakeHeadImage = document.getElementById("snake_head_down");
+            }
+            boardContext.fillStyle = "rgb(255,255,255)";
+            boardContext.fillRect(this.x, this.y, pixelSize, pixelSize);
+            boardContext.drawImage(snakeHeadImage, this.x, this.y, pixelSize, pixelSize);
+        }
+    }
+
+    this.unrender = function() {
+    	boardContext.clearRect(this.x, this.y, pixelSize, pixelSize);
+    }
+}
+
+function clearScreen() {
+	boardContext.fillStyle = "rgb(255,255,255)";
+	boardContext.fillRect(0,0,board.width,board.height);
+}
+
+function Snake(initialBodyPiece) {
+    this.bodyPieces	= new Array();
+    this.bodyPieces[0] = initialBodyPiece;
+
+    this.size = function() {
+        return bodyPieces.length;
+    }
+
+    this.render = function() {
+//        clearScreen();
+    	for (key in this.bodyPieces) {
+    		this.bodyPieces[key].render();
+    	}
+    }
+
+    this.changeTrajectory = function(trajectory) {
+    	var headBodyPiece = this.bodyPieces[0];
+    	headBodyPiece.trajectory=trajectory;
+    }
+
+    this.getTrajectory = function() {
+    	var headBodyPiece = this.bodyPieces[0];
+    	return headBodyPiece.trajectory;
+    }
+
+    this.addBodyPiece = function() {
+        var headBodyPiece = this.bodyPieces[0];
+
+        var newX = headBodyPiece.x;
+        var newY = headBodyPiece.y;
+
+        headBodyPiece.unrender();
+//        console.log("old head is at: " + headBodyPiece.x + ", " + headBodyPiece.y + " with trajectory " + headBodyPiece.trajectory);
+
+        if (headBodyPiece.trajectory==TRAJECTORY_LEFT) {
+            headBodyPiece.x = headBodyPiece.x - pixelSize;
+        } else if (headBodyPiece.trajectory==TRAJECTORY_RIGHT) {
+        	headBodyPiece.x = headBodyPiece.x + (pixelSize);
+        } else if (headBodyPiece.trajectory==TRAJECTORY_UP) {
+        	headBodyPiece.y = headBodyPiece.y - pixelSize;
+        } else if (headBodyPiece.trajectory==TRAJECTORY_DOWN) {
+        	headBodyPiece.y = headBodyPiece.y + (pixelSize);
+        }
+
+        if (deadlyWalls == true) {
+            if (headBodyPiece.x < 0 || headBodyPiece.x >= board.width || headBodyPiece.y < 0 || headBodyPiece.y >= board.height) {
+                running = false;
+                gameOver = true;
+                DisplayMessage("Snake died by running into a wall. Hit Space to start a new game.", true);
+//                alert('dead');
+            }
+        } else {
+            if (headBodyPiece.x < 0) {
+                headBodyPiece.x = board.width + headBodyPiece.x;
+            } else if (headBodyPiece.x >= board.width) {
+                headBodyPiece.x = headBodyPiece.x % board.width;
+            } else if (headBodyPiece.y < 0) {
+                headBodyPiece.y = board.height + headBodyPiece.y;
+            } else if (headBodyPiece.y >= board.height) {
+                headBodyPiece.y = headBodyPiece.y % board.height;
+            }
+
+            
+        }
+        
+        var newBodyPiece = new BodyPiece(newX, newY, headBodyPiece.trajectory);
+        snakePositions[headBodyPiece.x][headBodyPiece.y] = true;
+        this.bodyPieces.splice(1,0,newBodyPiece);
+
+        newBodyPiece.render();
+//        this.bodyPieces.unshift(newBodyPiece);
+
+//        headBodyPiece = this.bodyPieces[0];
+//        console.log("new head is at: " + headBodyPiece.x + ", " + headBodyPiece.y + " with trajectory " + headBodyPiece.trajectory);
+        
+        if (!gameOver && foodPositions[headBodyPiece.x][headBodyPiece.y] instanceof Food) {
+//            console.log("Snake ate food at: " + headBodyPiece.x + "," + headBodyPiece.y);
+            mustGrow = true;
+            score++;
+            document.getElementById("score").innerHTML = score;
+            FoodManager.removeFood(foodPositions[headBodyPiece.x][headBodyPiece.y]);
+        }
+        
+        headBodyPiece.render(); 
+
+        if (gameOver) snake.render();
+    }
+
+    this.removeBodyPiece = function() {
+        removedPiece = this.bodyPieces.pop();
+        snakePositions[removedPiece.x][removedPiece.y] = false;
+//        this.render();
+    }
+
+    this.advance = function() {
+
+        if (mustGrow) {
+            mustGrow = false;
+            snake.addBodyPiece();
+//            snake.render();
+            FoodManager.renderAllFood();
+            return;
+        }
+        
+    	var headBodyPiece = this.bodyPieces[0];
+    	var tailBodyPiece = this.bodyPieces[this.bodyPieces.length-1];
+
+    	snakePositions[tailBodyPiece.x][tailBodyPiece.y] = false;
+//    	console.log("head is at: " + headBodyPiece.x + ", " + headBodyPiece.y + " with trajectory " + headBodyPiece.trajectory);
+    	
+    	tailBodyPiece.unrender();
+    	headBodyPiece.unrender();
+    	
+    	if (headBodyPiece.trajectory==TRAJECTORY_LEFT) {
+            headBodyPiece.x = headBodyPiece.x - pixelSize;
+            headBodyPiece.y = headBodyPiece.y;
+
+            tailBodyPiece.x = headBodyPiece.x + pixelSize;
+            tailBodyPiece.y = headBodyPiece.y;
+            tailBodyPiece.trajectory=TRAJECTORY_LEFT;
+        } else if (headBodyPiece.trajectory==TRAJECTORY_RIGHT) {
+        	headBodyPiece.x = headBodyPiece.x + (pixelSize);
+        	headBodyPiece.y = headBodyPiece.y;
+
+        	tailBodyPiece.x = headBodyPiece.x - pixelSize;
+            tailBodyPiece.y = headBodyPiece.y;
+        	tailBodyPiece.trajectory=TRAJECTORY_RIGHT;
+        } else if (headBodyPiece.trajectory==TRAJECTORY_UP) {
+        	headBodyPiece.x = headBodyPiece.x;
+        	headBodyPiece.y = headBodyPiece.y - pixelSize;
+
+        	tailBodyPiece.x = headBodyPiece.x;
+            tailBodyPiece.y = headBodyPiece.y + pixelSize;
+            
+        	tailBodyPiece.trajectory=TRAJECTORY_UP;
+        } else if (headBodyPiece.trajectory==TRAJECTORY_DOWN) {
+            headBodyPiece.x = headBodyPiece.x;
+        	headBodyPiece.y = headBodyPiece.y + (pixelSize);
+
+        	tailBodyPiece.x = headBodyPiece.x;
+            tailBodyPiece.y = headBodyPiece.y - pixelSize;
+        	tailBodyPiece.trajectory=TRAJECTORY_DOWN;
+        }
+
+    	headBodyPiece = this.bodyPieces.shift();
+        this.bodyPieces.unshift(tailBodyPiece);
+        this.bodyPieces.pop();
+        this.bodyPieces.unshift(headBodyPiece);
+
+        headBodyPiece = this.bodyPieces[0];
+        tailBodyPiece = this.bodyPieces[1];
+
+        
+        if (deadlyWalls == true) {
+
+            if (headBodyPiece.x < 0 || headBodyPiece.x >= board.width || headBodyPiece.y < 0 || headBodyPiece.y >= board.height) {
+                //snake collided with walls
+                running = false;
+                gameOver = true;
+                DisplayMessage("Snake died by running into a wall. Hit Space to start a new game.", true);
+//                alert('dead');
+            }
+        } else {
+            if (headBodyPiece.x < 0) {
+                headBodyPiece.x = board.width + headBodyPiece.x;
+            } else if (headBodyPiece.x >= board.width) {
+                headBodyPiece.x = headBodyPiece.x % board.width;
+            } else if (headBodyPiece.y < 0) {
+                headBodyPiece.y = board.height + headBodyPiece.y;
+            } else if (headBodyPiece.y >= board.height) {
+                headBodyPiece.y = headBodyPiece.y % board.height;
+            }
+        }
+
+        if (!gameOver && snakePositions[headBodyPiece.x][headBodyPiece.y] == true) { //snake collided with itself
+            running = false;
+            gameOver = true;
+            DisplayMessage("Snake died by biting into itself. Hit Space to start a new game.", true);
+//            alert('dead');
+//            return;
+        }
+
+        if (!gameOver && foodPositions[headBodyPiece.x][headBodyPiece.y] instanceof Food) {
+//            console.log("Snake ate food at: " + headBodyPiece.x + "," + headBodyPiece.y);
+            mustGrow = true;
+            score++;
+            document.getElementById("score").innerHTML = score;
+            FoodManager.removeFood(foodPositions[headBodyPiece.x][headBodyPiece.y]);
+        }
+
+        if (!gameOver) {
+            snakePositions[headBodyPiece.x][headBodyPiece.y] = true;
+        }
+
+        if (gameOver) snake.render();
+
+        headBodyPiece.render();
+        tailBodyPiece.render();
+        
+        FoodManager.renderAllFood();
+
+        lockTrajectory = false
+    }
+}
+
+window.onresize = function() {
+	browserWidth = window.innerWidth;
+    browserHeight = window.innerHeight;
+}
+
+
+function loaded(){
+
+	if (window.innerWidth && window.innerHeight) {
+	    browserWidth = window.innerWidth;
+	    browserHeight = window.innerHeight;
+	}
+	
+	$("#instructions").click(function(){
+		if (running) {
+			running = false;
+			DisplayMessage("Game Paused. Hit Space to resume.", true);
+		}
+		$( "#dialog:ui-dialog" ).dialog( "destroy" );
+	    
+        $( "#instructions_dialog" ).dialog({
+            modal: true,
+            width: 600,
+            buttons: {
+                Ok: function() {
+                    $( this ).dialog( "close" );
+                }
+            }
+        });
+	});
+	
+    board = document.getElementById("board");
+    boardContext = board.getContext('2d');
+    boardContext.lineWidth = 0;
+
+    clearTimeout(gameTimer);
+    clearTimeout(foodSpawnTimer);
+    clearTimeout(displayMessageTimer);
+    
+    if (deadlyWalls == false) {
+        $("#board").css({"border-style": "dotted"});
+    } else {
+    	$("#board").css({"border-style": "solid"});
+    }
+
+    board.width = boardWidth;
+    board.height = boardHeight;
+    InitializeSnakePositions();
+    InitializeFoodPositions();
+
+    initialX = boardWidth/2 + ((boardWidth/2) % pixelSize);
+    initialY = boardHeight/2 + ((boardHeight/2) % pixelSize);
+	var initialBodyPiece = new BodyPiece(initialX, initialY, TRAJECTORY_LEFT, true);
+	snake = new Snake(initialBodyPiece);
+	snake.addBodyPiece();
+	
+	snake.render();
+    gameOver = false;
+    
+    score = 0;
+    var scoreHolder = document.getElementById("score").innerHTML = score;
+    
+//	gameTimer = setTimeout("gameLoop()", interval);
+//	FoodManager.spawnFood();
+	
+}
+
+function gameLoop() {
+	if (running == false) {
+		clearTimeout(gameTimer);
+		return;
+	}
+	snake.advance();
+	gameTimer = setTimeout("gameLoop()", interval);
+}
+
+$(document).keydown(function(event) {
+    
+    if (event.keyCode==37) {
+    	event.preventDefault();
+    	if (snake.getTrajectory() != TRAJECTORY_LEFT && snake.getTrajectory() != TRAJECTORY_RIGHT && lockTrajectory == false) {
+        	lockTrajectory = true;
+    	    snake.changeTrajectory(TRAJECTORY_LEFT);
+     	}
+    } else if (event.keyCode==38) {
+    	event.preventDefault();
+    	if (snake.getTrajectory() != TRAJECTORY_UP && snake.getTrajectory() != TRAJECTORY_DOWN && lockTrajectory == false) {
+    		lockTrajectory = true;
+    		snake.changeTrajectory(TRAJECTORY_UP);
+        }
+    } else if (event.keyCode==39) {
+    	event.preventDefault();
+    	if (snake.getTrajectory() != TRAJECTORY_LEFT && snake.getTrajectory() != TRAJECTORY_RIGHT && lockTrajectory == false) {
+    		lockTrajectory = true;
+    		snake.changeTrajectory(TRAJECTORY_RIGHT);
+        }
+    } else if (event.keyCode==40) {
+        
+        event.preventDefault();
+        if (snake.getTrajectory() != TRAJECTORY_UP && snake.getTrajectory() != TRAJECTORY_DOWN && lockTrajectory == false) {
+        	lockTrajectory = true;
+        	snake.changeTrajectory(TRAJECTORY_DOWN);
+        }
+    } else if (event.keyCode==32) { //pause-resume
+        if (gameOver) {
+            gameOver = false;
+            loaded();
+        }
+        running = !running;
+        if (running == true) {
+        	DismissMessage();
+            gameTimer = setTimeout("gameLoop()", interval);
+            FoodManager.spawnFood();
+        } else {
+            DisplayMessage("Game Paused. Hit Space to resume.", true);
+        }
+            
+    } else if (event.keyCode==90) {
+        snake.addBodyPiece();
+            
+    } else if (event.keyCode==86) {
+        snake.removeBodyPiece();
+    } else if (event.keyCode==221) { //increase width
+        if (lockWidth) return;
+        lockWidth = true;
+    	if (browserWidth - $("#board").attr('width') < 150) {
+    		DisplayMessage("This is the widest it can get. Hit space to start.");
+    		lockWidth = false;
+            return;
+        }
+    	DisplayMessage("Changed board size which caused game reset. Hit space to start."); 
+        $("#board").animate({width: "+=" + 2* pixelSize + "px", height: "+=0px"}, 100, function() {
+            boardWidth += pixelSize * 2;
+//            boardHeight += 30;
+            clearTimeout(gameTimer);
+            loaded();
+            lockWidth = false;
+        });
+    } else if (event.keyCode==219) { //decrease width
+        if (lockWidth) return;
+        lockWidth = true;
+        if (boardWidth > 120) {
+        	DisplayMessage("Changed board size which caused game reset. Hit space to start.");
+            $("#board").animate({width: "-=" + 2* pixelSize + "px", height: "+=0px"}, 100, function() {
+            	boardWidth -= pixelSize * 2;
+    //        	boardHeight -= 30;
+                clearTimeout(gameTimer);
+                loaded();
+                lockWidth = false;
+            });
+        } else {
+        	lockWidth = false;
+        	DisplayMessage("This is least wide it can get.");
+        }
+    } else if (event.keyCode==190) { //increase height
+        if (lockHeight) return;
+        lockHeight = true;
+        if (browserHeight - $("#board").attr('height') < 150) {
+        	DisplayMessage("This is the tallest it can get. Hit space to start.");
+        	lockHeight = false;
+            return;
+        } 
+
+        DisplayMessage("Changed board size which caused game reset. Hit space to start.");
+        
+        $("#board").animate({width: "-=0px", height: "+=" + 2 * pixelSize + "px"}, 100, function() {
+        	boardHeight += 2*pixelSize;
+            clearTimeout(gameTimer);
+            loaded();
+            lockHeight = false;
+        });
+    } else if (event.keyCode==188) { //decrease height
+    	if (lockHeight) return;
+    	lockHeight = true;
+        if (boardHeight > 120) {
+        	DisplayMessage("Changed board size which caused game reset. Hit space to start.");
+            $("#board").animate({width: "-=0px", height: "-=" + 2 * pixelSize + "px"}, 100, function() {
+                boardHeight -= 2*pixelSize;
+                
+                loaded();
+                lockHeight = false;
+            });
+            
+        } else {
+        	DisplayMessage("This is shortest it can get.");
+        	lockHeight = false;
+        }
+    } else if (event.keyCode==87) {
+        deadlyWalls = !deadlyWalls;
+        if (deadlyWalls == false) {
+            $("#board").css({"border-style": "dotted"});
+            DisplayMessage("Walls are now passable. Feel free to go through them.");
+        } else {
+            $("#board").css({"border-style": "solid"});
+            DisplayMessage("Walls are now deadly. Stay away from the edges.");
+        }
+    } else if (event.keyCode==187) {
+        if (interval > 20) {
+            interval -= 20;
+            DisplayMessage("Speed increased. Milliseconds between frames: " + interval);
+        } else {
+        	DisplayMessage("This is the fastest it gets. Milliseconds between frames: " + interval);
+        }
+    } else if (event.keyCode==189) {
+    	interval += 20;
+    	DisplayMessage("Speed decreased. Milliseconds between frames: " + interval);
+    }
+    
+});
+
+function DisplayMessage(message, sticky) {
+	clearTimeout(displayMessageTimer);
+	$("#message").stop();
+	$("#message_span").html(message);
+	$("#message").animate({"right": "0px"}, "fast");
+	
+	if (!sticky) {
+		displayMessageTimer = setTimeout("DismissMessage()", 5000);
+	}
+}
+
+function DismissMessage() {
+	$("#message").stop();
+	$("#message").animate({"right": "-270px"}, "slow");
+}
+
+</script>
+</head>
+<body
+	style="overflow: hidden; border: 0; margin: 0; padding: 0; min-height: 100%; background-color: #C0DFEC; background-image: url('images/tall_grass.jpg'); background-position: bottom;"
+	onLoad="loaded()">
+<div id="message"
+         style="font-family: verdana; 
+                z-index:1;
+                padding: 10px;
+                -webkit-border-top-left-radius: 10px;
+                opacity: 0.5;
+                -webkit-border-bottom-left-radius: 10px;
+                position: absolute;
+                width: 250px;
+                min-height: 100px;
+                top: 10px;
+                right: 0px;
+                background-color: #000000">
+       <span id="message_span" style="color: #ffffff; font-size: 24px; font-weight: bold; ">Read the instructions first. When ready, hit Space to begin.</span>
+    </div>	
+<div style="overflow: hidden; position: relative; width: 100%; margin: auto; text-align: center;">
+
+<img
+	id="snake_body" src="images/body3.png" alt="snake_body"
+	style="display: none" /> <img id="snake_body_dead"
+	src="images/body3_dead.png" alt="snake_body" style="display: none" /> <img
+	id="snake_head_left" src="images/head3_left.png" alt="snake_head"
+	style="display: none" /> <img id="snake_head_right"
+	src="images/head3_right.png" alt="snake_head" style="display: none" />
+<img id="snake_head_up" src="images/head3_up.png" alt="snake_head"
+	style="display: none" /> <img id="snake_head_down"
+	src="images/head3_down.png" alt="snake_head" style="display: none" /> <img
+	id="food_1" src="images/apple.png" alt="apple"
+	style="width: 5px; height: 5px; display: none" /> <img id="food_2"
+	src="images/banana.png" alt="banana"
+	style="width: 5px; height: 5px; display: none" /> <img id="food_3"
+	src="images/pineapple.png" alt="pineapple"
+	style="width: 5px; height: 5px; display: none" /> <img id="food_4"
+	src="images/pear.png" alt="pear"
+	style="width: 5px; height: 5px; display: none" /> <img id="food_5"
+	src="images/grape.png" alt="grape"
+	style="width: 5px; height: 5px; display: none" />
+
+<div id="header" style="margin: auto; width: 600px">
+<table style="width: 100%">
+	<tr>
+		<td style="font-family: Verdana; font-size: 45px; text-align: center">Score:
+		<span id="score"></span></td>
+	</tr>
+</table>
+</div>
+<canvas id="board"
+	style="z-index: -1; background-color: #FFF; width: 600; height: 300; border-width: 5px; border-color: black; border-style: solid">
+</canvas>
+<div style="margin-top: 15px; margin-bottom: 15px;"><a id="instructions"
+	style="background-color: white; text-color: black; font-family: Verdana; font-size: 24px; padding: 4px; border: 2px solid black; text-decoration: none; margin: 10px;"
+	href="#">Instructions</a></div>
+</div>
+
+<div id="instructions_dialog" style="display: none; width: 600px;"
+	title="Instructions">
+<p>Use the <b>arrow keys</b> to move the snake.<br />
+<br />
+<b>[</b> and <b>]</b> changes the board width (and restarts the game).<br />
+<br />
+<b>&lt;</b> and <b>&gt;</b> changes the board height (and restarts the
+game).<br />
+<br />
+<b>W</b> switches between impassable and passable walls.<br />
+<br />
+<b>+</b> and <b>-</b> adjusts game speed.<br />
+<br />
+<b>Spacebar</b> pauses the game.<br />
+<br />
+<br />
+For debugging purposes:<br />
+<br />
+<b>Z</b> will increase the length of the snake.<br />
+<br />
+<b>V</b> will reduce the length of the snake.<br />
+<br />
+</p>
+</div>
+</body>
+
+</html>
