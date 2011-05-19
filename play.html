@@ -300,7 +300,7 @@ function Snake(initialBodyPiece) {
     this.removeBodyPiece = function() {
         removedPiece = this.bodyPieces.pop();
         snakePositions[removedPiece.x][removedPiece.y] = false;
-//        this.render();
+        removedPiece.unrender();
     }
 
     this.advance = function() {
@@ -601,7 +601,7 @@ $(document).keydown(function(event) {
         	DisplayMessage("This is shortest it can get.");
         	lockHeight = false;
         }
-    } else if (event.keyCode==87) {
+    } else if (event.keyCode==87) { //change walls
         deadlyWalls = !deadlyWalls;
         if (deadlyWalls == false) {
             $("#board").css({"border-style": "dotted"});
@@ -610,16 +610,18 @@ $(document).keydown(function(event) {
             $("#board").css({"border-style": "solid"});
             DisplayMessage("Walls are now deadly. Stay away from the edges.");
         }
-    } else if (event.keyCode==187) {
+    } else if (event.keyCode==187) { //increase speed
         if (interval > 20) {
             interval -= 20;
             DisplayMessage("Speed increased. Milliseconds between frames: " + interval);
         } else {
         	DisplayMessage("This is the fastest it gets. Milliseconds between frames: " + interval);
         }
-    } else if (event.keyCode==189) {
+    } else if (event.keyCode==189) { //decrease speed
     	interval += 20;
     	DisplayMessage("Speed decreased. Milliseconds between frames: " + interval);
+    } else if (event.keyCode==191) {
+        $("#instructions").click();
     }
     
 });
